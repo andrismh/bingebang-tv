@@ -1,8 +1,8 @@
 {
   "name": "bingebang-tv",
   "appName": "BingeBang TV",
-  "version": "1.0.0",
-  "description": "Remote-friendly layer for bingebang.st on Samsung Tizen TVs: visible focus ring, 10-foot type scale, full-bleed player, media keys, self-heal on expired access passes.",
+  "version": "1.1.0",
+  "description": "Remote-friendly layer for bingebang.st on Samsung Tizen TVs: D-pad cursor, visible focus ring, 10-foot type scale, full-bleed player, media keys, self-heal on expired access passes.",
   "packageType": "mods",
   "websiteURL": "https://bingebang.st",
   "main": "index.js",

@@ -8,6 +8,7 @@ usable with a Samsung TV remote and a 10-foot viewing distance.
 | Problem | Fix |
 |---|---|
 | Every visible focus style is `:focus-visible`, which Tizen 6.0's Chromium 78 ignores → only a 1px UA ring remains | Injects a `:focus` ring (2px `#a78bfa`, 4px glow, 1.03 scale) |
+| The site implements no arrow-key navigation, so a remote can open the page but not move around it | Own D-pad cursor: geometry-scored focus (row-locked left/right, nearest-row up/down), Enter clicks, Back goes back, first element auto-focused on load |
 | Layout sized for a laptop: 15px body, 13.5px card titles at 1080p | Root font-size 10px → 12.5px (body 18.75px, titles ~17px) |
 | Player sits in the page chrome | On `/movie/play/*` and `/tv/play/*`: video forced to `100vw/100vh`, page scroll locked |
 | Site never binds media keys (0 occurrences in the bundle) | `MediaPlayPause/Play/Pause/Stop/FastForward/Rewind` routed to the `<video>` |
@@ -25,7 +26,7 @@ TizenBrew loads modules through jsDelivr, so the repo must be **public** and at 
 ## Editing
 
 jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.0.1 && git push --tags`),
-then reference `yourname/bingebang-tv@v1.0.1` in TizenBrew — or purge the cache at
+then reference `yourname/bingebang-tv@v1.1.0` in TizenBrew — or purge the cache at
 `https://cdn.jsdelivr.net/gh/yourname/bingebang-tv/`.
 
 Fast loop without republishing: open the site in desktop Chrome and paste the contents of `index.js` into the console.
@@ -44,4 +45,9 @@ Fast loop without republishing: open the site in desktop Chrome and paste the co
 Desktop Chrome (as a Chromium-78 proxy) against a mock and the live site: root font 12.5px, body 18.75px,
 focus ring `2px solid rgb(167,139,250)`, single injected `<style>` after double injection, `bbtv-play` class only on play
 routes, video 1920×1080, media-key ordering `["play","pause","play"]`, watchdog clicks Retry, zero page errors on
-`bingebang.st` with all 176 home cards still rendering. Not verified on real TV hardware.
+`bingebang.st` with all 176 home cards still rendering.
+
+Navigation: 11/11 assertions on a mock (auto-focus, right/left inside a row, down/up between shelves, row scroll,
+`Enter` navigates, Back navigates) and an 11-stop trail on the live site that stays in the viewport with a visible ring
+everywhere: logo → `Play` → `Add to watchlist` → `More info` → `This Week` → hero arrow → shelf arrow → poster card.
+Not verified on real TV hardware.

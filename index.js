@@ -12,6 +12,8 @@
 
   var HOST_ALT = { 'bingebang.st': 'bingebang.club', 'www.bingebang.st': 'bingebang.club' };
   var MEDIA = { 10252: 'toggle', 415: 'play', 19: 'pause', 413: 'toggle', 417: 'ffwd', 412: 'rwnd' };
+  var ARROWS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
+  var SEL = 'a[href],button,[role="button"],[tabindex]:not([tabindex="-1"]),summary,select';
   var lastReload = 0;
 
   var CSS = [
@@ -54,6 +56,109 @@
   function playThen(fn) {
     try { var p = fn(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
   }
+
+  /* ---------- D-pad cursor: the TV engine's spatial nav does not reach this page ---------- */
+  function visible(el) {
+    if (el.disabled || el.getAttribute('aria-hidden') === 'true') return false;
+    var r = el.getBoundingClientRect();
+    if (r.width * r.height < 600) return false;
+    var cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity) > 0.05;
+  }
+
+  function candidates() {
+    return Array.prototype.filter.call(document.querySelectorAll(SEL), visible);
+  }
+
+  function inView(el) {
+    var r = el.getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+  }
+
+  function focusEl(el) {
+    try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    var r = el.getBoundingClientRect();
+    /* nearest can leave a tall card a few pixels clipped; recentre when it does */
+    if (r.top < 8 || r.bottom > innerHeight - 8) el.scrollIntoView({ block: 'center', inline: 'nearest' });
+  }
+
+  function focusDefault() {
+    var all = candidates();
+    var cards = all.filter(function (el) {
+      var r = el.getBoundingClientRect();
+      return /\/watch\//.test(el.getAttribute('href') || '') && r.width * r.height > 8000 && inView(el);
+    });
+    var pick = cards[0] || all.filter(inView)[0] || all[0];
+    if (pick) focusEl(pick);
+  }
+
+  function move(dir) {
+    var cur = document.activeElement;
+    if (!cur || cur === document.body || !cur.matches(SEL) || !visible(cur)) return focusDefault();
+
+    var cr = cur.getBoundingClientRect();
+    var cx = cr.left + cr.width / 2;
+    var cy = cr.top + cr.height / 2;
+    var horizontal = dir === 'left' || dir === 'right';
+    var best = null;
+    var bestScore = Infinity;
+
+    candidates().forEach(function (el) {
+      if (el === cur || el.contains(cur) || cur.contains(el)) return;
+      var r = el.getBoundingClientRect();
+      var dx = r.left + r.width / 2 - cx;
+      var dy = r.top + r.height / 2 - cy;
+      var primary = dir === 'left' ? -dx : dir === 'right' ? dx : dir === 'up' ? -dy : dy;
+      if (primary < 4) return;
+
+      if (horizontal) {
+        /* stay inside the row so left/right never hop to another shelf */
+        if (Math.min(cr.bottom, r.bottom) - Math.max(cr.top, r.top) <= 0) return;
+        var score = primary + Math.abs(dy) * 0.5;
+      } else {
+        var hOverlap = Math.min(cr.right, r.right) - Math.max(cr.left, r.left);
+        var score = primary + Math.abs(dx) * 2 - (hOverlap > 0 ? 30 : 0);
+      }
+      if (score < bestScore) { bestScore = score; best = el; }
+    });
+
+    if (best) focusEl(best);
+    else if (!horizontal) window.scrollBy(0, dir === 'down' ? 320 : -320);
+  }
+
+  function activate() {
+    var el = document.activeElement;
+    if (!el || el === document.body) focusDefault();
+    else if (el.click) el.click();
+  }
+
+  function typing(e) {
+    var t = e.target;
+    return !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+  }
+
+  window.addEventListener('keydown', function (e) {
+    if (typing(e)) return;
+    var code = e.keyCode || e.which;
+
+    if (ARROWS[code]) {
+      e.preventDefault();
+      e.stopPropagation();
+      move(ARROWS[code]);
+      return;
+    }
+    if (code === 13) {
+      e.preventDefault();
+      e.stopPropagation();
+      activate();
+      return;
+    }
+    if (code === 10009 && history.length > 1) {
+      e.preventDefault();
+      history.back();
+    }
+  }, true);
 
   /* The site never binds media keys, so they die unless we take them. */
   window.addEventListener('keydown', function (e) {
@@ -128,5 +233,8 @@
     if (isPlay) document.documentElement.classList.add('bbtv-play');
     startWatchdog();
     checkHostFallback();
+    if (!isPlay) setTimeout(function () {
+      if (!document.activeElement || document.activeElement === document.body) focusDefault();
+    }, 800);
   });
 })();
