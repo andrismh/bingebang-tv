@@ -122,7 +122,7 @@
     var bestZ = -1;
     for (var i = 0; i < list.length; i++) {
       var r = visibleWithRect(list[i]);
-      if (!r || r.width * r.height < innerWidth * innerHeight * 0.15) continue;
+      if (!r || r.width * r.height < innerWidth * innerHeight * 0.08) continue;
       var z = parseInt(getComputedStyle(list[i]).zIndex, 10);
       if (isNaN(z)) z = 0;
       if (z >= bestZ) { bestZ = z; best = list[i]; }
@@ -131,7 +131,8 @@
   }
 
   function closeScope(s) {
-    var btn = s.querySelector('[aria-label*="close" i],[class*="close" i]');
+    /* inside the player's drawer, Back means one level up, not close everything */
+    var btn = s.querySelector('button[aria-label*="back" i],[class*="back" i],button[aria-label*="close" i],[class*="close" i]');
     if (btn && visible(btn)) btn.click();
     else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
   }
@@ -156,12 +157,25 @@
     if (pick) focusEl(pick);
   }
 
+  /* Inside a drawer, land on something to choose, not on the dismiss control. */
+  function focusInside(s) {
+    var all = candidates(s);
+    var pick = null;
+    for (var i = 0; i < all.length && !pick; i++) {
+      if (!/close|back|dismiss/i.test((all[i].getAttribute('aria-label') || '') + ' ' + (all[i].className || ''))) pick = all[i];
+    }
+    pick = pick || all[0];
+    prefX = null;
+    if (pick) focusEl(pick);
+    return !!pick;
+  }
+
   function move(dir) {
     var cur = document.activeElement;
     var bound = scope();
     var usable = cur && cur !== document.body && cur.matches(SEL) && visible(cur) && (!bound || bound.contains(cur));
-    /* the player owns the remote on /play/, so never pull focus there from nowhere */
-    if (!usable) return isPlay ? undefined : focusDefault();
+    /* the player owns the remote on /play/: reach its own controls instead of doing nothing */
+    if (!usable) return isPlay ? (bound ? focusInside(bound) : enterChrome()) : focusDefault();
 
     var cr = cur.getBoundingClientRect();
     var cx = cr.left + cr.width / 2;
@@ -210,7 +224,15 @@
       /* remember where you ended up, so the next vertical move returns here */
       if (horizontal) prefX = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
     } else if (!horizontal) {
-      window.scrollBy(0, dir === 'down' ? 320 : -320);
+      /* a drawer is open: stop at its edge instead of dropping the cursor on the film */
+      if (bound) return;
+      /* leaving the control bar downwards hands the remote back to the film */
+      if (isPlay) {
+        lastFocus = null;
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      } else {
+        window.scrollBy(0, dir === 'down' ? 320 : -320);
+      }
     }
   }
 
@@ -300,6 +322,27 @@
     return true;
   }
 
+  /* The player's controls are ordinary <button>s; nothing focuses them on a TV, and they
+     are the only way to reach server, quality, subtitles and settings. */
+  function enterChrome() {
+    wake();
+    var primary = document.querySelector('button[aria-label="Play"],button[aria-label="Pause"]');
+    if (primary && visible(primary)) {
+      focusEl(primary);
+      return true;
+    }
+    var bar = Array.prototype.slice.call(document.querySelectorAll(SEL)).filter(function (el) {
+      var r = visibleWithRect(el);
+      return r && r.top > innerHeight * 0.6;
+    });
+    bar.sort(function (a, b) {
+      return a.getBoundingClientRect().left - b.getBoundingClientRect().left;
+    });
+    if (!bar.length) return false;
+    focusEl(bar[0]);
+    return true;
+  }
+
   function startBufferWatch() {
     var t1 = null;
     var t2 = null;
@@ -336,35 +379,47 @@
   }
 
   function startNavObserver() {
-    var debounce = null;
+    var timer = null;
+    var ranAt = 0;
     var prevScope = null;
 
-    new MutationObserver(function () {
-      clearTimeout(debounce);
-      debounce = setTimeout(function () {
-        var s = scope();
-        if (s && s !== prevScope) {
-          var a = document.activeElement;
-          if (a && a !== document.body && !s.contains(a)) scopeOrigin = a;
-          else if (lastFocus && !s.contains(lastFocus)) scopeOrigin = lastFocus;
-          if (!s.contains(document.activeElement)) {
-            var first = candidates(s)[0];
-            if (first) focusEl(first);
-          }
-        } else if (!s && prevScope) {
-          var o = scopeOrigin;
-          scopeOrigin = null;
-          if (o && o.isConnected && visible(o)) focusEl(o);
-          else if (!controlFocused()) focusDefault();
-        }
-        prevScope = s;
+    function run() {
+      timer = null;
+      ranAt = Date.now();
+      var s = scope();
+      if (s && s !== prevScope) {
+        var a = document.activeElement;
+        if (a && a !== document.body && !s.contains(a)) scopeOrigin = a;
+        else if (lastFocus && !s.contains(lastFocus)) scopeOrigin = lastFocus;
+        if (!s.contains(document.activeElement)) focusInside(s);
+      } else if (!s && prevScope) {
+        var o = scopeOrigin;
+        scopeOrigin = null;
+        if (o && o.isConnected && visible(o)) focusEl(o);
+        else if (!controlFocused()) focusDefault();
+      }
+      prevScope = s;
 
-        /* a re-render can drop the focused node; put the cursor back */
-        if (!s && !isPlay && keyed && (!document.activeElement || document.activeElement === document.body)) {
-          if (lastFocus && lastFocus.isConnected && visible(lastFocus)) focusEl(lastFocus);
-          else focusDefault();
+      /* a re-render can drop the focused node; put the cursor back */
+      if (keyed && (!document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected)) {
+        if (s) {
+          /* a drawer swapped its panel: the old tile is gone, focus the new one */
+          var f = candidates(s)[0];
+          if (f) focusEl(f);
+        } else if (lastFocus && lastFocus.isConnected && visible(lastFocus)) {
+          focusEl(lastFocus);
+        } else if (!isPlay) {
+          focusDefault();
         }
-      }, 300);
+      }
+    }
+
+    /* The player repaints its clock four times a second, so a debounce that restarts on
+       every mutation never fires. Throttle instead: run once, then at most every 300 ms. */
+    new MutationObserver(function () {
+      if (timer) return;
+      var wait = Math.max(0, 300 - (Date.now() - ranAt));
+      timer = setTimeout(run, wait);
     }).observe(document.body || document.documentElement, { childList: true, subtree: true });
 
     document.addEventListener('focusin', function () { lastFocus = document.activeElement; });
@@ -389,6 +444,13 @@
         e.target.blur();
         return;
       }
+      /* inside the player's controls, Back leaves the controls, not the film */
+      if (isPlay && controlFocused()) {
+        e.preventDefault();
+        lastFocus = null;
+        document.activeElement.blur();
+        return;
+      }
       if (history.length > 1) {
         e.preventDefault();
         history.back();
@@ -400,10 +462,17 @@
 
     if (ARROWS[code]) {
       var dir = ARROWS[code];
-      var seeking = isPlay && !controlFocused() && (dir === 'left' || dir === 'right');
       e.preventDefault();
       e.stopPropagation();
-      if (seeking && seek(dir === 'right' ? 15 : -15)) return;
+      if (isPlay && !controlFocused()) {
+        /* left/right nudge the film; up/down reveal the control bar and take focus into it */
+        if (dir === 'left' || dir === 'right') {
+          seek(dir === 'right' ? 15 : -15);
+        } else {
+          enterChrome();
+        }
+        return;
+      }
       move(dir);
       return;
     }

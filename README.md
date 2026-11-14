@@ -14,6 +14,8 @@ usable with a Samsung TV remote and a 10-foot viewing distance.
 | Coming back from a detail page dumps focus at the top of the grid again | The focused element is remembered per URL in `sessionStorage`; Back lands on the card you left |
 | Dialogs do not trap the cursor: arrows can wander onto the page behind | The topmost visible `[role=dialog]` / `[aria-modal]` becomes the navigation boundary |
 | On the player, left/right do nothing and Enter does nothing | ←/→ seek ±15s (clamped, with an on-screen `» 15s`), Enter toggles play/pause — only when no control is focused, so the site keeps priority |
+| The player's own buttons (server, quality, subtitles, settings) are plain `<button>`s that nothing ever focuses, so a remote can only skip and pause | ↑/↓ move the cursor into the control bar and focus Play/Pause; ←/→ then walk the bar (Back 10s → Forward 10s → Mute → Quality → Subtitles → Server → Settings → Fullscreen), Enter activates, ↓ hands the remote back to the film |
+| The settings drawer is a `role=dialog` that redraws its panel when you pick a category, dropping focus on the floor | The drawer becomes the navigation boundary, its first real choice gets focus, and a re-render puts the cursor back on the new panel instead of the page |
 | A stalled stream looks like a frozen screen; players that hide their controls until a mouse moves never show them | `Buffering…` pill after 2s (plus a "pick another server" hint at 20s), synthetic throttled `mousemove` on every keypress to wake the OSD |
 | Subtitles are sized for desktop | `video::cue` at 1.35em with a dark scrim (only if the page uses a native track — the live player draws subtitles in its own `.pl-cues` layer at ~43px, which needs no help) |
 | Layout sized for a laptop: 15px body, 13.5px card titles at 1080p | Root font-size 10px → 12.5px (body 18.75px, titles ~17px) |
@@ -32,8 +34,8 @@ TizenBrew loads modules through jsDelivr, so the repo must be **public** and at 
 
 ## Editing
 
-jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.2.0 && git push --tags`),
-then reference `yourname/bingebang-tv@v1.2.0` in TizenBrew — or purge the cache at
+jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.3.0 && git push --tags`),
+then reference `yourname/bingebang-tv@v1.3.0` in TizenBrew — or purge the cache at
 `https://cdn.jsdelivr.net/gh/yourname/bingebang-tv/`.
 
 Fast loop without republishing: open the site in desktop Chrome and paste the contents of `index.js` into the console.
@@ -70,6 +72,16 @@ the stream reaches `readyState 4` and climbs 1s per second, ArrowRight seeks +15
 Enter pauses and resumes, Back returns to `/movie/watch/<slug>` with the Play button refocused and a 2px ring, one
 navigation, zero page errors, and the watchdog stays silent for the whole session. The live player draws subtitles in its
 own `.pl-cues` layer (43px at 1080p), not through a `<video>` track, so the `::cue` rule is inert there.
+
+v1.3.0 player controls, measured on the live player: ↑ from the film focuses `Pause` at [39,981,75,75] with the 2px ring, then
+seven → presses walk `Back 10 seconds → Forward 10 seconds → Mute → Quality → Subtitles → Server → Settings → Fullscreen`
+(geometry jumps the gap in the middle of the bar), ↓ returns to the film, and ↑ comes back to `Pause`. `Enter` on
+Settings opens the drawer (`role=dialog .pl-gate-sheet`, 688x477) with focus on the first real choice; picking the
+Subtitles category re-renders the panel to `Back / Close / Off / OpenSubtitles / Upload / Options` (688x328) and focus lands
+on the new panel 150ms later instead of the page behind it; Back closes a level and returns focus to the `Settings` button.
+The re-render fix was a real bug in the observer: the player repaints its clock four times a second, so the 300ms
+debounce never fired — replacement is a throttle that always runs once. Regression after the change: 23/23 mock
+assertions, 11/11 navigation assertions, 14-press live home trail with nothing out of view.
 Arrow keys over 600 cards: p95 4.3 ms per keypress. Live: a 14-press down-trail from the hero to the footer keeps every
 stop inside the viewport with the ring drawn, ends at `scrollY 4261`, and logs no page errors.
 
