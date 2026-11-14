@@ -24,6 +24,7 @@ usable with a Samsung TV remote and a 10-foot viewing distance.
 | Player sits in the page chrome | On `/movie/play/*` and `/tv/play/*`: video forced to `100vw/100vh`, page scroll locked |
 | Site never binds media keys (0 occurrences in the bundle) | `MediaPlayPause/Play/Pause/Stop/FastForward/Rewind` routed to the `<video>` |
 | "All servers failed" / expired access pass | Acts only when a `<video>` is genuinely stalled **and** the visible text is a terminal error; retries once, then shows `Stream failing — Back, then pick another server`. Budget of 2 actions per URL per 5 min, persisted in `sessionStorage`, so it cannot loop or reload-storm |
+| Switching titles after a long 4K session gets laggy: a torn-down 4K pipeline keeps its decoder and MSE buffers until GC | On `pagehide` (real navigations only, not bfcache restores) the video is paused, its `src` removed, `load()`ed and the blob URL revoked, so the decoder is released before the next document allocates one |
 | Domain rotation (`bingebang.st` ↔ `bingebang.club`) | Swaps host once on a dead/Cloudflare page instead of showing a blank screen |
 
 ## Install
@@ -36,8 +37,8 @@ TizenBrew loads modules through jsDelivr, so the repo must be **public** and at 
 
 ## Editing
 
-jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.4.0 && git push --tags`),
-then reference `yourname/bingebang-tv@v1.4.0` in TizenBrew — or purge the cache at
+jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.4.1 && git push --tags`),
+then reference `yourname/bingebang-tv@v1.4.1` in TizenBrew — or purge the cache at
 `https://cdn.jsdelivr.net/gh/yourname/bingebang-tv/`.
 
 Fast loop without republishing: open the site in desktop Chrome and paste the contents of `index.js` into the console.
@@ -102,3 +103,14 @@ the page reloaded every ~1.6s (measured: 5 navigations in 8s on a mock picker pa
 failure text, matching runs against `innerText` so hidden menus cannot trigger it, the player must actually be stalled,
 and the retry budget is persisted per URL. Re-measured: picker mock 1 navigation / 0 clicks, failure mock exactly 1 Retry
 click then a stable hint. Gate page behind the VPN wall: 1 navigation in 20s.
+
+v1.4.1 stream lifecycle, measured on the live player: the certificate of “no cache” is negative evidence — `navigator.serviceWorker`
+has 0 registrations, `caches.keys()` is empty, `indexedDB.databases()` is empty, and segments arrive by redirect to
+`cdn30091.geffe448mik.com/vod/<hash>/360/segment0.ts?md5=…&expires=…`, signed per play, so Chromium's HTTP cache cannot reuse
+them. The only buffer is MSE: over a 94s sample the forward buffer held steady at 90.7–91.8s, `buffered.start(0)` climbed
+0 → 16 → 30 → 46 → 60 (the engine trims the back buffer at 60s), the JS heap stayed at 10–18MB and 0 frames were dropped at
+1280x533. The engine's own defaults in `player.bundle.min.js` are `maxBufferLength` 300s / `maxBufferSize` 600MB, or 60s /
+120MB with `backBufferLength` 30s when it decides the device is a TV; the served config here produced 90s forward / 60s back.
+On `pagehide` the module now detaches the media element (`attr:null`, `readyState 0`, `networkState 0`), which is what forces
+the TV to give up the decoder before the next title allocates a second one. Regression: 23/23 mock, 11/11 navigation, 1
+navigation / 0 page errors on the live play route.

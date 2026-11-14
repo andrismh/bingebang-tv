@@ -598,6 +598,22 @@
     }, 8000);
   }
 
+  /* Release the decoder and its MSE buffers before the next document allocates a new pipeline.
+     Tizen keeps a torn-down 4K pipeline alive until GC, so switching titles after a long 4K
+     session can stack two decoders in memory. */
+  window.addEventListener('pagehide', function (e) {
+    if (e.persisted) return;
+    var v = document.querySelector('video');
+    if (!v) return;
+    try {
+      var src = v.currentSrc || v.src || '';
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+      if (src.slice(0, 5) === 'blob:') URL.revokeObjectURL(src);
+    } catch (err) {}
+  });
+
   onReady(function () {
     if (isPlay) document.documentElement.classList.add('bbtv-play');
     startWatchdog();

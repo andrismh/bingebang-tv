@@ -1,7 +1,7 @@
 {
   "name": "bingebang-tv",
   "appName": "BingeBang TV",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Remote-friendly layer for bingebang.st on Samsung Tizen TVs: D-pad cursor with remembered column, player control-bar and settings-drawer navigation, visible focus ring, 10-foot type scale, full-bleed player with ±15s seek and buffering feedback, media keys, and a retry watchdog that cannot loop.",
   "packageType": "mods",
   "websiteURL": "https://bingebang.st",
