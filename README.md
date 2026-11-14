@@ -15,6 +15,8 @@ usable with a Samsung TV remote and a 10-foot viewing distance.
 | Dialogs do not trap the cursor: arrows can wander onto the page behind | The topmost visible `[role=dialog]` / `[aria-modal]` becomes the navigation boundary |
 | On the player, left/right do nothing and Enter does nothing | ←/→ seek ±15s (clamped, with an on-screen `» 15s`), Enter toggles play/pause — only when no control is focused, so the site keeps priority |
 | The player's own buttons (server, quality, subtitles, settings) are plain `<button>`s that nothing ever focuses, so a remote can only skip and pause | ↑/↓ move the cursor into the control bar and focus Play/Pause; ←/→ then walk the bar (Back 10s → Forward 10s → Mute → Quality → Subtitles → Server → Settings → Fullscreen), Enter activates, ↓ hands the remote back to the film |
+| After choosing a server, quality or subtitle the drawer closes, the bar fades out and the cursor is stranded on the tile you came from | Closing a drawer puts the cursor back on Play/Pause and the bar is held open while a control is focused (a `mousemove` on the element under the bottom edge every 2s) |
+| Search results cannot be reached: the cursor stays in the text box and ↓ does nothing useful | ↓/↑ from a search field walk into the suggestion list, Enter opens the result; an opening search overlay focuses its own input instead of its first button |
 | The settings drawer is a `role=dialog` that redraws its panel when you pick a category, dropping focus on the floor | The drawer becomes the navigation boundary, its first real choice gets focus, and a re-render puts the cursor back on the new panel instead of the page |
 | A stalled stream looks like a frozen screen; players that hide their controls until a mouse moves never show them | `Buffering…` pill after 2s (plus a "pick another server" hint at 20s), synthetic throttled `mousemove` on every keypress to wake the OSD |
 | Subtitles are sized for desktop | `video::cue` at 1.35em with a dark scrim (only if the page uses a native track — the live player draws subtitles in its own `.pl-cues` layer at ~43px, which needs no help) |
@@ -34,8 +36,8 @@ TizenBrew loads modules through jsDelivr, so the repo must be **public** and at 
 
 ## Editing
 
-jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.3.0 && git push --tags`),
-then reference `yourname/bingebang-tv@v1.3.0` in TizenBrew — or purge the cache at
+jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.4.0 && git push --tags`),
+then reference `yourname/bingebang-tv@v1.4.0` in TizenBrew — or purge the cache at
 `https://cdn.jsdelivr.net/gh/yourname/bingebang-tv/`.
 
 Fast loop without republishing: open the site in desktop Chrome and paste the contents of `index.js` into the console.
@@ -82,6 +84,15 @@ on the new panel 150ms later instead of the page behind it; Back closes a level 
 The re-render fix was a real bug in the observer: the player repaints its clock four times a second, so the 300ms
 debounce never fired — replacement is a throttle that always runs once. Regression after the change: 23/23 mock
 assertions, 11/11 navigation assertions, 14-press live home trail with nothing out of view.
+
+v1.4.0, measured on the live player and the live search overlay: after choosing a category, Back closes the drawer and
+leaves the cursor on `Pause` with `.pl-chrome` carrying `show` — still `show` after 13s of no input, where before the fix it
+dropped the class at ~10s and stayed hidden while the cursor kept moving. The wake call was firing `mousemove` at
+`document`, which never reaches a listener bound to `.player`; it now dispatches on `elementFromPoint(bottom-centre)`.
+Search: clicking `Search` focuses `input.search-input` (`aria-label="Search query"`), typing `heart`, ↓ moves to
+`a.sr-item[href=/movie/watch/heart-of-the-beast-2026-muyoob]`, ↓ again to `heartland-hzchxf`, ↑ returns to the first
+result, Enter opens the result dialog (`Play trailer / Close / Add to watchlist / Add to favorites / Mark as watched`).
+Regression: 23/23 mock, 11/11 navigation.
 Arrow keys over 600 cards: p95 4.3 ms per keypress. Live: a 14-press down-trail from the hero to the footer keeps every
 stop inside the viewport with the ring drawn, ends at `scrollY 4261`, and logs no page errors.
 

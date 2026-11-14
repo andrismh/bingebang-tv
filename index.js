@@ -13,7 +13,7 @@
   var HOST_ALT = { 'bingebang.st': 'bingebang.club', 'www.bingebang.st': 'bingebang.club' };
   var MEDIA = { 10252: 'toggle', 415: 'play', 19: 'pause', 413: 'toggle', 417: 'ffwd', 412: 'rwnd' };
   var ARROWS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
-  var SEL = 'a[href],button,[role="button"],[tabindex]:not([tabindex="-1"]),summary,select';
+  var SEL = 'a[href],button,[role="button"],[tabindex]:not([tabindex="-1"]),summary,select,input[type="search"],input[type="text"],input:not([type])';
   var GUARD_KEY = 'bbtv-fail';
 
   var CSS = [
@@ -162,7 +162,10 @@
     var all = candidates(s);
     var pick = null;
     for (var i = 0; i < all.length && !pick; i++) {
-      if (!/close|back|dismiss/i.test((all[i].getAttribute('aria-label') || '') + ' ' + (all[i].className || ''))) pick = all[i];
+      if (/^INPUT$/.test(all[i].tagName) && /text|search|""/.test(all[i].getAttribute('type') || '')) pick = all[i];
+    }
+    for (var j = 0; j < all.length && !pick; j++) {
+      if (!/close|back|dismiss/i.test((all[j].getAttribute('aria-label') || '') + ' ' + (all[j].className || ''))) pick = all[j];
     }
     pick = pick || all[0];
     prefX = null;
@@ -369,13 +372,16 @@
   }
 
   /* Players hide their OSD until they see a pointer; nudge them on every keypress. */
-  function wake() {
+  function wake(force) {
     var now = Date.now();
-    if (now - wakeAt < 400) return;
+    if (!force && now - wakeAt < 400) return;
     wakeAt = now;
-    document.dispatchEvent(new MouseEvent('mousemove', {
-      bubbles: true, clientX: innerWidth / 2, clientY: innerHeight - 40
-    }));
+    /* dispatch on the element under the point, not on document: the player listens on its own
+       stage, and events fired at document never reach a descendant's listener */
+    var x = innerWidth / 2;
+    var y = innerHeight - 40;
+    var target = document.elementFromPoint(x, y) || document.querySelector('.player') || document.body;
+    target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }));
   }
 
   function startNavObserver() {
@@ -395,8 +401,15 @@
       } else if (!s && prevScope) {
         var o = scopeOrigin;
         scopeOrigin = null;
-        if (o && o.isConnected && visible(o)) focusEl(o);
-        else if (!controlFocused()) focusDefault();
+        if (isPlay) {
+          /* finished choosing in a drawer: the bar comes back on Play/Pause */
+          enterChrome();
+          wake(true);
+        } else if (o && o.isConnected && visible(o)) {
+          focusEl(o);
+        } else if (!controlFocused()) {
+          focusDefault();
+        }
       }
       prevScope = s;
 
@@ -457,7 +470,18 @@
       }
       return;
     }
-    if (typing(e)) return;
+    if (typing(e)) {
+      /* ↑/↓ leave a text field and walk into whatever it opened — search results */
+      if (code !== 38 && code !== 40) return;
+      if (!e.target.matches || !e.target.matches(SEL)) return;
+      var field = document.activeElement;
+      e.preventDefault();
+      e.stopPropagation();
+      wake();
+      move(ARROWS[code]);
+      if (document.activeElement === field) return;
+      return;
+    }
     wake();
 
     if (ARROWS[code]) {
@@ -579,6 +603,10 @@
     startWatchdog();
     startNavObserver();
     startBufferWatch();
+    /* the player hides its bar after a few idle seconds; hold it up while the cursor is in it */
+    if (isPlay) setInterval(function () {
+      if (controlFocused()) wake(true);
+    }, 2000);
     checkHostFallback();
     if (!isPlay) setTimeout(function () {
       if (keyed) return;
