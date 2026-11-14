@@ -25,7 +25,9 @@
     'box-shadow:0 0 0 4px rgba(167,139,250,.30)!important;border-radius:6px;',
     'transform:scale(1.03);transition:transform .12s ease,box-shadow .12s ease;position:relative;z-index:5}',
     'html.bbtv-play body{overflow:hidden!important}',
-    'html.bbtv-play video{width:100vw!important;height:100vh!important;object-fit:contain!important;background:#000}'
+    'html.bbtv-play video{width:100vw!important;height:100vh!important;object-fit:contain!important;background:#000}',
+    /* cues are burned at native resolution; scale with the 12.5px root */
+    'video::cue{background-color:rgba(0,0,0,.55);font-size:1.35em}'
   ].join('');
 
   /* TizenBrew evaluates this at executionContextCreated, where <html> may not exist yet. */
@@ -58,21 +60,58 @@
   }
 
   /* ---------- D-pad cursor: the TV engine's spatial nav does not reach this page ---------- */
-  function visible(el) {
-    if (el.disabled || el.getAttribute('aria-hidden') === 'true') return false;
+  var FOCUS_KEY = 'bbtv-focus';
+  var isPlay = /^\/[^/]+\/play\//.test(location.pathname);
+  var prefX = null;      /* remembered column, so vertical moves do not drift */
+  var scopeOrigin = null; /* element to refocus when a modal closes */
+  var lastFocus = null;
+  var keyed = false;
+  var wakeAt = 0;
+  var hudEl = null;
+  var hudTimer = null;
+
+  /* One rect read per element per move: geometry is the expensive part on a TV. */
+  function visibleWithRect(el) {
+    if (el.disabled || el.getAttribute('aria-hidden') === 'true') return null;
     var r = el.getBoundingClientRect();
-    if (r.width * r.height < 600) return false;
+    if (r.width * r.height < 600) return null;
     var cs = getComputedStyle(el);
-    return cs.visibility !== 'hidden' && cs.display !== 'none' && parseFloat(cs.opacity) > 0.05;
+    if (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) <= 0.05) return null;
+    return r;
   }
 
-  function candidates() {
-    return Array.prototype.filter.call(document.querySelectorAll(SEL), visible);
+  function visible(el) {
+    return !!visibleWithRect(el);
+  }
+
+  function candidates(root) {
+    return Array.prototype.filter.call((root || document).querySelectorAll(SEL), visible);
   }
 
   function inView(el) {
     var r = el.getBoundingClientRect();
     return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth;
+  }
+
+  /* The topmost visible modal is the navigation boundary. */
+  function scope() {
+    var list = document.querySelectorAll('[role="dialog"],dialog[open],[aria-modal="true"]');
+    var best = null;
+    var bestZ = -1;
+    for (var i = 0; i < list.length; i++) {
+      var r = visibleWithRect(list[i]);
+      if (!r || r.width * r.height < innerWidth * innerHeight * 0.15) continue;
+      var z = parseInt(getComputedStyle(list[i]).zIndex, 10);
+      if (isNaN(z)) z = 0;
+      if (z >= bestZ) { bestZ = z; best = list[i]; }
+    }
+    return best;
+  }
+
+  function closeScope(s) {
+    var btn = s.querySelector('[aria-label*="close" i],[class*="close" i]');
+    if (btn && visible(btn)) btn.click();
+    else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
   }
 
   function focusEl(el) {
@@ -84,53 +123,80 @@
   }
 
   function focusDefault() {
-    var all = candidates();
+    var bound = scope();
+    var all = candidates(bound);
     var cards = all.filter(function (el) {
       var r = el.getBoundingClientRect();
       return /\/watch\//.test(el.getAttribute('href') || '') && r.width * r.height > 8000 && inView(el);
     });
     var pick = cards[0] || all.filter(inView)[0] || all[0];
+    prefX = null;
     if (pick) focusEl(pick);
   }
 
   function move(dir) {
     var cur = document.activeElement;
-    if (!cur || cur === document.body || !cur.matches(SEL) || !visible(cur)) return focusDefault();
+    var bound = scope();
+    var usable = cur && cur !== document.body && cur.matches(SEL) && visible(cur) && (!bound || bound.contains(cur));
+    /* the player owns the remote on /play/, so never pull focus there from nowhere */
+    if (!usable) return isPlay ? undefined : focusDefault();
 
     var cr = cur.getBoundingClientRect();
     var cx = cr.left + cr.width / 2;
     var cy = cr.top + cr.height / 2;
     var horizontal = dir === 'left' || dir === 'right';
-    var best = null;
-    var bestScore = Infinity;
+    var px = prefX == null ? cx : prefX;
+    var pool = [];
 
-    candidates().forEach(function (el) {
+    Array.prototype.forEach.call((bound || document).querySelectorAll(SEL), function (el) {
       if (el === cur || el.contains(cur) || cur.contains(el)) return;
-      var r = el.getBoundingClientRect();
+      var r = visibleWithRect(el);
+      if (!r) return;
       var dx = r.left + r.width / 2 - cx;
       var dy = r.top + r.height / 2 - cy;
       var primary = dir === 'left' ? -dx : dir === 'right' ? dx : dir === 'up' ? -dy : dy;
       if (primary < 4) return;
-
-      if (horizontal) {
-        /* stay inside the row so left/right never hop to another shelf */
-        if (Math.min(cr.bottom, r.bottom) - Math.max(cr.top, r.top) <= 0) return;
-        var score = primary + Math.abs(dy) * 0.5;
-      } else {
-        var hOverlap = Math.min(cr.right, r.right) - Math.max(cr.left, r.left);
-        var score = primary + Math.abs(dx) * 2 - (hOverlap > 0 ? 30 : 0);
-      }
-      if (score < bestScore) { bestScore = score; best = el; }
+      /* left/right stay inside the row so they never hop to another shelf */
+      if (horizontal && Math.min(cr.bottom, r.bottom) - Math.max(cr.top, r.top) <= 0) return;
+      pool.push({ el: el, r: r, dx: dx, dy: dy, primary: primary });
     });
 
-    if (best) focusEl(best);
-    else if (!horizontal) window.scrollBy(0, dir === 'down' ? 320 : -320);
+    /* up/down only consider the nearest row, or a wide column offset can skip a shelf */
+    if (!horizontal && pool.length) {
+      var minP = Infinity;
+      for (var i = 0; i < pool.length; i++) if (pool[i].primary < minP) minP = pool[i].primary;
+      var limit = minP + Math.max(60, minP * 0.5);
+      pool = pool.filter(function (c) { return c.primary <= limit; });
+    }
+
+    var best = null;
+    var bestScore = Infinity;
+    pool.forEach(function (c) {
+      var score;
+      if (horizontal) {
+        score = c.primary + Math.abs(c.dy) * 0.5;
+      } else {
+        /* target the remembered column, not the nearest centre of a raggedy row */
+        var hOverlap = Math.min(cr.right, c.r.right) - Math.max(cr.left, c.r.left);
+        score = c.primary + Math.abs(c.r.left + c.r.width / 2 - px) * 2 - (hOverlap > 0 ? 30 : 0);
+      }
+      if (score < bestScore) { bestScore = score; best = c.el; }
+    });
+
+    if (best) {
+      focusEl(best);
+      /* remember where you ended up, so the next vertical move returns here */
+      if (horizontal) prefX = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
+    } else if (!horizontal) {
+      window.scrollBy(0, dir === 'down' ? 320 : -320);
+    }
   }
 
   function activate() {
     var el = document.activeElement;
-    if (!el || el === document.body) focusDefault();
-    else if (el.click) el.click();
+    if (!el || el === document.body) return focusDefault();
+    remember();
+    if (el.click) el.click();
   }
 
   function typing(e) {
@@ -138,25 +204,198 @@
     return !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
   }
 
+  /* ---------- remember the focused element per URL, so Back returns to it ---------- */
+  function marker(el) {
+    if (!el || !el.getAttribute) return null;
+    var href = el.getAttribute('href');
+    if (href) return 'a:' + href;
+    var label = el.getAttribute('aria-label');
+    if (label) return 'l:' + label;
+    var t = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    return t ? 't:' + t : null;
+  }
+
+  function remember() {
+    var m = marker(document.activeElement);
+    if (!m) return;
+    try {
+      var all = JSON.parse(sessionStorage.getItem(FOCUS_KEY) || '{}');
+      all[location.pathname] = m;
+      sessionStorage.setItem(FOCUS_KEY, JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  function restore() {
+    var m = null;
+    try { m = (JSON.parse(sessionStorage.getItem(FOCUS_KEY) || '{}'))[location.pathname]; } catch (e) {}
+    if (!m) return false;
+
+    var el = null;
+    var val = m.slice(2).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    try {
+      if (m.slice(0, 2) === 'a:') el = document.querySelector('a[href="' + val + '"]');
+      else if (m.slice(0, 2) === 'l:') el = document.querySelector('[aria-label="' + val + '"]');
+    } catch (e) {}
+    if (!el) {
+      var all = candidates();
+      for (var i = 0; i < all.length; i++) {
+        if (marker(all[i]) === m) { el = all[i]; break; }
+      }
+    }
+    if (el && visible(el)) { prefX = null; focusEl(el); return true; }
+    return false;
+  }
+
+  /* ---------- on-screen feedback for seek / buffering ---------- */
+  function hud(text, ttl) {
+    var root = document.body || document.documentElement;
+    if (!root) return;
+    if (!hudEl || !hudEl.parentNode) {
+      hudEl = document.createElement('div');
+      hudEl.id = 'bbtv-hud';
+      hudEl.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:2147483000;padding:10px 18px;' +
+        'border-radius:999px;background:rgba(12,12,18,.88);color:#fff;font:600 1.6rem/1.3 system-ui,sans-serif;' +
+        'pointer-events:none;opacity:0;transition:opacity .15s';
+      root.appendChild(hudEl);
+    }
+    hudEl.textContent = text || '';
+    hudEl.style.opacity = text ? '1' : '0';
+    clearTimeout(hudTimer);
+    /* ttl 0 = sticky, leave it up until the next playing/canplay */
+    if (text && ttl !== 0) hudTimer = setTimeout(function () { hud('', 0); }, ttl || 1200);
+  }
+
+  function controlFocused() {
+    var a = document.activeElement;
+    return !!a && a !== document.body && a.matches && a.matches(SEL);
+  }
+
+  function seek(delta) {
+    var v = document.querySelector('video');
+    if (!v || !isFinite(v.duration)) return false;
+    v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta));
+    hud((delta > 0 ? '\u00bb ' : '\u00ab ') + Math.abs(delta) + 's', 900);
+    return true;
+  }
+
+  function startBufferWatch() {
+    var t1 = null;
+    var t2 = null;
+    function clear() {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      t1 = t2 = null;
+      hud('', 0);
+    }
+    document.addEventListener('waiting', function (e) {
+      if (!e.target || e.target.tagName !== 'VIDEO') return;
+      clearTimeout(t1);
+      clearTimeout(t2);
+      t1 = setTimeout(function () {
+        hud('Buffering\u2026', 0);
+        t2 = setTimeout(function () { hud('Still buffering \u2014 Back, then pick another server', 0); }, 20000);
+      }, 2000);
+    }, true);
+    ['playing', 'canplay'].forEach(function (name) {
+      document.addEventListener(name, function (e) {
+        if (e.target && e.target.tagName === 'VIDEO') clear();
+      }, true);
+    });
+  }
+
+  /* Players hide their OSD until they see a pointer; nudge them on every keypress. */
+  function wake() {
+    var now = Date.now();
+    if (now - wakeAt < 400) return;
+    wakeAt = now;
+    document.dispatchEvent(new MouseEvent('mousemove', {
+      bubbles: true, clientX: innerWidth / 2, clientY: innerHeight - 40
+    }));
+  }
+
+  function startNavObserver() {
+    var debounce = null;
+    var prevScope = null;
+
+    new MutationObserver(function () {
+      clearTimeout(debounce);
+      debounce = setTimeout(function () {
+        var s = scope();
+        if (s && s !== prevScope) {
+          var a = document.activeElement;
+          if (a && a !== document.body && !s.contains(a)) scopeOrigin = a;
+          else if (lastFocus && !s.contains(lastFocus)) scopeOrigin = lastFocus;
+          if (!s.contains(document.activeElement)) {
+            var first = candidates(s)[0];
+            if (first) focusEl(first);
+          }
+        } else if (!s && prevScope) {
+          var o = scopeOrigin;
+          scopeOrigin = null;
+          if (o && o.isConnected && visible(o)) focusEl(o);
+          else if (!controlFocused()) focusDefault();
+        }
+        prevScope = s;
+
+        /* a re-render can drop the focused node; put the cursor back */
+        if (!s && !isPlay && keyed && (!document.activeElement || document.activeElement === document.body)) {
+          if (lastFocus && lastFocus.isConnected && visible(lastFocus)) focusEl(lastFocus);
+          else focusDefault();
+        }
+      }, 300);
+    }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+
+    document.addEventListener('focusin', function () { lastFocus = document.activeElement; });
+  }
+
+  document.addEventListener('focusin', function () { setTimeout(remember, 300); });
+
   window.addEventListener('keydown', function (e) {
-    if (typing(e)) return;
     var code = e.keyCode || e.which;
+    keyed = true;
+
+    /* Back: close a layer, then leave a text field, then leave the page. */
+    if (code === 10009) {
+      var s = scope();
+      if (s) {
+        e.preventDefault();
+        closeScope(s);
+        return;
+      }
+      if (typing(e)) {
+        e.preventDefault();
+        e.target.blur();
+        return;
+      }
+      if (history.length > 1) {
+        e.preventDefault();
+        history.back();
+      }
+      return;
+    }
+    if (typing(e)) return;
+    wake();
 
     if (ARROWS[code]) {
+      var dir = ARROWS[code];
+      var seeking = isPlay && !controlFocused() && (dir === 'left' || dir === 'right');
       e.preventDefault();
       e.stopPropagation();
-      move(ARROWS[code]);
+      if (seeking && seek(dir === 'right' ? 15 : -15)) return;
+      move(dir);
       return;
     }
     if (code === 13) {
       e.preventDefault();
       e.stopPropagation();
+      if (isPlay && !controlFocused()) {
+        var v = document.querySelector('video');
+        if (v) {
+          v.paused ? playThen(function () { return v.play(); }) : v.pause();
+          return;
+        }
+      }
       activate();
-      return;
-    }
-    if (code === 10009 && history.length > 1) {
-      e.preventDefault();
-      history.back();
     }
   }, true);
 
@@ -164,6 +403,8 @@
   window.addEventListener('keydown', function (e) {
     var code = e.keyCode || e.which;
     var v = document.querySelector('video');
+
+    wake();
 
     if (v && MEDIA[code]) {
       e.preventDefault();
@@ -229,11 +470,14 @@
   }
 
   onReady(function () {
-    var isPlay = /^\/[^/]+\/play\//.test(location.pathname);
     if (isPlay) document.documentElement.classList.add('bbtv-play');
     startWatchdog();
+    startNavObserver();
+    startBufferWatch();
     checkHostFallback();
     if (!isPlay) setTimeout(function () {
+      if (keyed) return;
+      if (restore()) return;
       if (!document.activeElement || document.activeElement === document.body) focusDefault();
     }, 800);
   });

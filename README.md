@@ -8,7 +8,14 @@ usable with a Samsung TV remote and a 10-foot viewing distance.
 | Problem | Fix |
 |---|---|
 | Every visible focus style is `:focus-visible`, which Tizen 6.0's Chromium 78 ignores → only a 1px UA ring remains | Injects a `:focus` ring (2px `#a78bfa`, 4px glow, 1.03 scale) |
-| The site implements no arrow-key navigation, so a remote can open the page but not move around it | Own D-pad cursor: geometry-scored focus (row-locked left/right, nearest-row up/down), Enter clicks, Back goes back, first element auto-focused on load |
+| The site implements no arrow-key navigation, so a remote can open the page but not move around it | Own D-pad cursor: geometry-scored focus, row-locked left/right, nearest-row up/down with a remembered column, Enter clicks, first element auto-focused on load |
+| Ragged shelves (wide "spotlight" rows) make a naive nearest-centre up/down drift a column | The column you pressed left/right to reach is remembered, so up/down always returns to it |
+| Back leaves the page even when a dialog is open, or a search field is focused | Back order: close the topmost modal → leave a text field → history back. Focus returns to the element that opened the dialog |
+| Coming back from a detail page dumps focus at the top of the grid again | The focused element is remembered per URL in `sessionStorage`; Back lands on the card you left |
+| Dialogs do not trap the cursor: arrows can wander onto the page behind | The topmost visible `[role=dialog]` / `[aria-modal]` becomes the navigation boundary |
+| On the player, left/right do nothing and Enter does nothing | ←/→ seek ±15s (clamped, with an on-screen `» 15s`), Enter toggles play/pause — only when no control is focused, so the site keeps priority |
+| A stalled stream looks like a frozen screen; players that hide their controls until a mouse moves never show them | `Buffering…` pill after 2s (plus a "pick another server" hint at 20s), synthetic throttled `mousemove` on every keypress to wake the OSD |
+| Subtitles are sized for desktop | `video::cue` at 1.35em with a dark scrim |
 | Layout sized for a laptop: 15px body, 13.5px card titles at 1080p | Root font-size 10px → 12.5px (body 18.75px, titles ~17px) |
 | Player sits in the page chrome | On `/movie/play/*` and `/tv/play/*`: video forced to `100vw/100vh`, page scroll locked |
 | Site never binds media keys (0 occurrences in the bundle) | `MediaPlayPause/Play/Pause/Stop/FastForward/Rewind` routed to the `<video>` |
@@ -25,8 +32,8 @@ TizenBrew loads modules through jsDelivr, so the repo must be **public** and at 
 
 ## Editing
 
-jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.0.1 && git push --tags`),
-then reference `yourname/bingebang-tv@v1.1.0` in TizenBrew — or purge the cache at
+jsDelivr caches hard. After a change, bump `version` in `package.json`, commit, tag (`git tag v1.2.0 && git push --tags`),
+then reference `yourname/bingebang-tv@v1.2.0` in TizenBrew — or purge the cache at
 `https://cdn.jsdelivr.net/gh/yourname/bingebang-tv/`.
 
 Fast loop without republishing: open the site in desktop Chrome and paste the contents of `index.js` into the console.
@@ -51,3 +58,11 @@ Navigation: 11/11 assertions on a mock (auto-focus, right/left inside a row, dow
 `Enter` navigates, Back navigates) and an 11-stop trail on the live site that stays in the viewport with a visible ring
 everywhere: logo → `Play` → `Add to watchlist` → `More info` → `This Week` → hero arrow → shelf arrow → poster card.
 Not verified on real TV hardware.
+
+v1.2 additions, 23/23 assertions on the mock: the remembered column survives a wide 2-card row (712 → 484 → 712, where
+a naive nearest-centre move lands at 516), modal cursor confinement, Back closes a dialog without navigating and refocuses
+its opener, per-URL focus restore after a detail-page round trip (`/movie/watch/m1-3` in and out), ±15s seek clamped to
+`[0, duration]` with a ``» 15s`` HUD that clears itself, Enter toggling `paused` both ways, buffering pill appearing after
+2s and clearing on `playing`, exactly one synthetic `mousemove` for five rapid keypresses, and the `video::cue` rule.
+Arrow keys over 600 cards: p95 4.3 ms per keypress. Live: a 14-press down-trail from the hero to the footer keeps every
+stop inside the viewport with the ring drawn, ends at `scrollY 4261`, and logs no page errors.
