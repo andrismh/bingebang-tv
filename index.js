@@ -14,7 +14,7 @@
   var MEDIA = { 10252: 'toggle', 415: 'play', 19: 'pause', 413: 'toggle', 417: 'ffwd', 412: 'rwnd' };
   var ARROWS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
   var SEL = 'a[href],button,[role="button"],[tabindex]:not([tabindex="-1"]),summary,select';
-  var lastReload = 0;
+  var GUARD_KEY = 'bbtv-fail';
 
   var CSS = [
     /* 10px root makes 15px body text; scale for a 10-foot view */
@@ -48,10 +48,32 @@
     else fn();
   }
 
+  /* Retry budget that survives a reload — a per-document timer resets and loops. */
+  function attempts() {
+    try {
+      return JSON.parse(sessionStorage.getItem(GUARD_KEY) || '{}')[location.pathname] || { n: 0, t: 0 };
+    } catch (e) {
+      return { n: 0, t: 0 };
+    }
+  }
+
+  function allowAttempt() {
+    var a = attempts();
+    if (Date.now() - a.t < 20000) return false;
+    return a.n < 2 || Date.now() - a.t > 300000;
+  }
+
+  function noteAttempt() {
+    try {
+      var all = JSON.parse(sessionStorage.getItem(GUARD_KEY) || '{}');
+      all[location.pathname] = { n: attempts().n + 1, t: Date.now() };
+      sessionStorage.setItem(GUARD_KEY, JSON.stringify(all));
+    } catch (e) {}
+  }
+
   function reloadThrottled() {
-    var now = Date.now();
-    if (now - lastReload < 15000) return;
-    lastReload = now;
+    if (!allowAttempt()) return;
+    noteAttempt();
     location.reload();
   }
 
@@ -431,18 +453,32 @@
   function startWatchdog() {
     var debounce = null;
 
+    /* A player page is not "failed" while something is playing or loading. */
+    function broken() {
+      var v = document.querySelector('video');
+      return !!v && (!!v.error || v.readyState < 3 || v.paused);
+    }
+
     function failed() {
-      var t = document.body ? document.body.textContent || '' : '';
-      return /(all )?servers? failed|access pass (has )?expired|session (has )?expired|try another server/i.test(t);
+      if (!broken()) return false;
+      /* innerText, not textContent: hidden menus and hints must not count */
+      var t = document.body ? document.body.innerText || '' : '';
+      return /(all )?servers? failed|no (working|available) servers?|access pass (has )?expired|session (has )?expired/i.test(t);
     }
 
     function recover() {
       var buttons = Array.prototype.slice.call(document.querySelectorAll('button,a,[role="button"]'));
       var retry = buttons.filter(function (el) {
-        return /retry|try again|reload|refresh|another server/i.test(el.textContent || '');
+        return /retry|try again|reload|refresh/i.test(el.textContent || '');
       })[0];
+      if (!allowAttempt()) {
+        hud('Stream failing \u2014 Back, then pick another server', 0);
+        return;
+      }
+      noteAttempt();
       if (retry) retry.click();
-      else reloadThrottled();
+      else if (attempts().n === 1) location.reload();
+      else hud('Stream failing \u2014 Back, then pick another server', 0);
     }
 
     new MutationObserver(function () {

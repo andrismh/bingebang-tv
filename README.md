@@ -19,7 +19,7 @@ usable with a Samsung TV remote and a 10-foot viewing distance.
 | Layout sized for a laptop: 15px body, 13.5px card titles at 1080p | Root font-size 10px → 12.5px (body 18.75px, titles ~17px) |
 | Player sits in the page chrome | On `/movie/play/*` and `/tv/play/*`: video forced to `100vw/100vh`, page scroll locked |
 | Site never binds media keys (0 occurrences in the bundle) | `MediaPlayPause/Play/Pause/Stop/FastForward/Rewind` routed to the `<video>` |
-| "All servers failed" / expired access pass | Detects the text, clicks Retry, else reloads once per 15s; also recovers from `video` error |
+| "All servers failed" / expired access pass | Acts only when a `<video>` is genuinely stalled **and** the visible text is a terminal error; retries once, then shows `Stream failing — Back, then pick another server`. Budget of 2 actions per URL per 5 min, persisted in `sessionStorage`, so it cannot loop or reload-storm |
 | Domain rotation (`bingebang.st` ↔ `bingebang.club`) | Swaps host once on a dead/Cloudflare page instead of showing a blank screen |
 
 ## Install
@@ -66,3 +66,10 @@ its opener, per-URL focus restore after a detail-page round trip (`/movie/watch/
 2s and clearing on `playing`, exactly one synthetic `mousemove` for five rapid keypresses, and the `video::cue` rule.
 Arrow keys over 600 cards: p95 4.3 ms per keypress. Live: a 14-press down-trail from the hero to the footer keeps every
 stop inside the viewport with the ring drawn, ends at `scrollY 4261`, and logs no page errors.
+
+v1.2.1 fixes a reload storm the 1.2.0 watchdog caused: a player page whose visible text includes a hint like "try another
+server" matched the failure regex on every mutation, and the reload throttle lived in a variable that a reload resets, so
+the page reloaded every ~1.6s (measured: 5 navigations in 8s on a mock picker page). The regex now only accepts terminal
+failure text, matching runs against `innerText` so hidden menus cannot trigger it, the player must actually be stalled,
+and the retry budget is persisted per URL. Re-measured: picker mock 1 navigation / 0 clicks, failure mock exactly 1 Retry
+click then a stable hint. Gate page behind the VPN wall: 1 navigation in 20s.
